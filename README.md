@@ -10,7 +10,7 @@
 ### Proof of Concept
 NTR? YES IT WORKS!\
 ![B660_POC](/images/prom21_on_b660.png?raw=true)\
-![M4_POC](/images/pprom21_on_mac_via_tbt5.png?raw=true)
+![M4_POC](/images/prom21_on_mac_via_tbt5.png?raw=true)
 
 ### About the firmware
 The firmware can be loaded in 3 ways
