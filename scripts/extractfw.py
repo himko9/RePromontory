@@ -92,7 +92,7 @@ def generate_header(chip_model: str, custom_info: str, xdata: list) -> bytes:
 
     if custom_info:
         if len(custom_info) > 16:
-            print("Custom information is too long, trimming to 16 characters.")
+            print(f"Info: Custom information is too long, trimming to 16 characters.")
         custom_info = custom_info[:16]
         header += custom_info.encode('ascii')
         padding = (16 - len(header) % 16) % 16
@@ -140,10 +140,9 @@ def generate_header(chip_model: str, custom_info: str, xdata: list) -> bytes:
     return header + checksum + crc32
 
 # This function extract RAW firmware without AGESA's header and PSP's HMAC signature
-def extract_firmware(data: bytes, input_file: str, output_dir: str, ignore_checksum: bool, spi_mode: bool, custom_info: str, xdata: list) -> int:
+def extract_firmware(data: bytes, output_dir: str, ignore_checksum: bool, spi_mode: bool, custom_info: str, xdata: list, seen_hashes: set) -> int:
     extracted_count = 0
     offset = 0
-    seen_hashes = set()
 
     while offset < len(data):
         # Search for the AGESA _PT_ header
@@ -175,11 +174,11 @@ def extract_firmware(data: bytes, input_file: str, output_dir: str, ignore_check
         if is_valid:
             # Check if the firmware has been extracted before, 600/800 series motherboard's UEFI image contain multiple Prom FW 
             if fw_hash in seen_hashes:
-                print(f"|-- Found {fw_type} firmware at {fw_pos}\n|  |- This is a replica, skipping extraction.\n|")
+                print(f"|-- Found {fw_type} firmware at {fw_pos}\n|  |- This firmware has been extracted before, in the same file or batch of files, skipping extraction.\n|")
                 offset = pos + length
                 continue
             # Check if SPI header moded enabled.
-            if spi_mode:
+            if spi_mode and fw_type != "UNKNOWN":
                 chip_info = [
                     ("Prom",   b"3306A_FW"),
                     ("PromLP", b"3306B_FW"),
@@ -200,9 +199,12 @@ def extract_firmware(data: bytes, input_file: str, output_dir: str, ignore_check
                     if padding:
                         fw_data += b'\xFF' * padding
                 except Exception as e:
-                    print(f"Failed to add header: {e}")
+                    print(f"Error: Failed to add header: {e}")
                     offset = pos + length
                     continue
+            elif spi_mode:
+                print(f"Error: Unable to add SPI header, because:\n a. The firmware is corrupted\n b. The chipset is a newly released and unsupported model.")
+                spi_mode = False
             else:
                 fw_data = fw_data[0xC:0xC + size]
 
@@ -238,15 +240,13 @@ def extract_firmware(data: bytes, input_file: str, output_dir: str, ignore_check
     return extracted_count
 
 # This function loads UEFI images
-def process_file(filepath: str, output_dir: str, ignore_checksum: bool, spi_mode: bool, write_custom: str, write_xdata: str) -> int:
+def process_file(filepath: str, output_dir: str, ignore_checksum: bool, spi_mode: bool, write_custom: str, write_xdata: str, seen_hashes: set) -> int:
     try:
         with open(filepath, "rb") as file:
             data = file.read()
     except FileNotFoundError:
         print(f"Error: Cannot open file '{filepath}'.", file=sys.stderr)
         return 0
-
-    filename = os.path.basename(filepath)
 
     xdata_list = []
     if write_xdata:
@@ -258,7 +258,7 @@ def process_file(filepath: str, output_dir: str, ignore_checksum: bool, spi_mode
             print(f"Error parsing --write-xdata: {e}", file=sys.stderr)
             return 0
 
-    return extract_firmware(data, filename, output_dir, ignore_checksum, spi_mode, write_custom, xdata_list)
+    return extract_firmware(data, output_dir, ignore_checksum, spi_mode, write_custom, xdata_list, seen_hashes)
 
 # This function read command line args
 def main() -> int:
@@ -273,13 +273,14 @@ def main() -> int:
     args = parser.parse_args()
 
     total_extracted = 0
+    seen_hashes = set()
 
     if args.write_custom and not args.write_header:
         args.write_header = True
-        print("Info: --write-custom is specified, --write-header has been enabled automatically")
+        print(f"Info: --write-custom is specified, --write-header has been enabled automatically")
     if args.write_xdata and not args.write_header:
         args.write_header = True
-        print("Info: --write-xdata is specified, --write-header has been enabled automatically")
+        print(f"Info: --write-xdata is specified, --write-header has been enabled automatically")
             
     if args.input_directory:
         if not os.path.isdir(args.input_directory):
@@ -290,21 +291,21 @@ def main() -> int:
             full_path = os.path.join(args.input_directory, file)
             if os.path.isfile(full_path):
                 print(f"\nProcessing: {file}")
-                total_extracted += process_file(full_path, args.output_directory, args.ignore_checksum, args.write_header, args.write_custom, args.write_xdata)
+                total_extracted += process_file(full_path, args.output_directory, args.ignore_checksum, args.write_header, args.write_custom, args.write_xdata, seen_hashes)
 
     elif args.input_file:
         print(f"\nProcessing: {args.input_file}")
-        total_extracted += process_file(args.input_file, args.output_directory, args.ignore_checksum, args.write_header, args.write_custom, args.write_xdata)
+        total_extracted += process_file(args.input_file, args.output_directory, args.ignore_checksum, args.write_header, args.write_custom, args.write_xdata, seen_hashes)
 
     else:
-        print("Error: You must specify either --input-file or --input-directory.", file=sys.stderr)
+        print(f"Error: You must specify either --input-file or --input-directory.", file=sys.stderr)
         return 1
 
     if total_extracted > 0:
-        print(f"\nSuccessfully extracted {total_extracted} firmware image(s).")
+        print(f"\nInfo: Successfully extracted {total_extracted} unique firmware image(s).")
         return 0
     else:
-        print("\nNo valid firmware images were found.")
+        print(f"\nInfo: No valid firmware images were found.")
         return 1
 
 if __name__ == "__main__":
